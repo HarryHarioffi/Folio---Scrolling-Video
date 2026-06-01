@@ -7,6 +7,7 @@ import { motion } from "motion/react";
 import { useState, useEffect, useRef } from "react";
 import { NAV_ITEMS } from "../data/content";
 import FolioLogo from "./ui/FolioLogo";
+import { useLenis } from "lenis/react";
 
 interface NavbarProps {
   toggleMenu: () => void;
@@ -16,6 +17,7 @@ export default function Navbar({ toggleMenu }: NavbarProps) {
   const [scrolled, setScrolled] = useState(false);
   const [visible, setVisible] = useState(true);
   const lastScrollY = useRef(0);
+  const lenis = useLenis();
 
   useEffect(() => {
     const handleScroll = () => {
@@ -41,6 +43,32 @@ export default function Navbar({ toggleMenu }: NavbarProps) {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
+  const handleNavClick = (e: React.MouseEvent<HTMLAnchorElement>, targetId: string) => {
+    e.preventDefault();
+    if (lenis) {
+      lenis.scrollTo(targetId, {
+        duration: 1.2,
+        easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)), // expo out easing
+      });
+    } else {
+      const el = document.querySelector(targetId);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth" });
+      }
+    }
+  };
+
+  const handleLogoClick = () => {
+    if (lenis) {
+      lenis.scrollTo(0, {
+        duration: 1.2,
+        easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
+      });
+    } else {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  };
+
   return (
     <motion.nav
       initial={{ opacity: 0, y: -20 }}
@@ -50,7 +78,7 @@ export default function Navbar({ toggleMenu }: NavbarProps) {
         } px-5 sm:px-8 md:px-12 py-5 md:py-6 flex items-center justify-between`}
     >
       {/* Left Logo */}
-      <div className="cursor-pointer text-text-primary" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+      <div className="cursor-pointer text-text-primary" onClick={handleLogoClick}>
         <FolioLogo className="h-5 md:h-6 w-auto" />
       </div>
 
@@ -60,6 +88,7 @@ export default function Navbar({ toggleMenu }: NavbarProps) {
           <motion.a
             key={item}
             href={`#${item.toLowerCase()}`}
+            onClick={(e) => handleNavClick(e, `#${item.toLowerCase()}`)}
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: 0.08 * (i + 1), ease: [0.22, 1, 0.36, 1] }}

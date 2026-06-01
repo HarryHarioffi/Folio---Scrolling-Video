@@ -7,6 +7,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { ArrowUpRight, X } from "lucide-react";
 import { NAV_ITEMS } from "../data/content";
 import FolioLogo from "./ui/FolioLogo";
+import { useLenis } from "lenis/react";
 
 interface MobileMenuProps {
   isOpen: boolean;
@@ -14,6 +15,25 @@ interface MobileMenuProps {
 }
 
 export default function MobileMenu({ isOpen, toggleMenu }: MobileMenuProps) {
+  const lenis = useLenis();
+
+  const handleLinkClick = (e: React.MouseEvent<HTMLAnchorElement>, targetId: string) => {
+    e.preventDefault();
+    toggleMenu();
+    if (lenis) {
+      setTimeout(() => {
+        lenis.scrollTo(targetId, {
+          duration: 1.2,
+          easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
+        });
+      }, 100);
+    } else {
+      const el = document.querySelector(targetId);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth" });
+      }
+    }
+  };
   return (
     <AnimatePresence>
       {isOpen && (
@@ -49,7 +69,7 @@ export default function MobileMenu({ isOpen, toggleMenu }: MobileMenuProps) {
               >
                 <a
                   href={`#${item.toLowerCase()}`}
-                  onClick={toggleMenu}
+                  onClick={(e) => handleLinkClick(e, `#${item.toLowerCase()}`)}
                   className="font-display text-[clamp(2.5rem,10vw,5rem)] text-text-primary uppercase leading-tight block"
                 >
                   {item}
@@ -60,7 +80,11 @@ export default function MobileMenu({ isOpen, toggleMenu }: MobileMenuProps) {
 
           {/* Bottom CTA */}
           <div className="mt-auto pb-4">
-            <a href="#contact" onClick={toggleMenu} className="flex items-center gap-2 font-sans text-lg font-medium text-accent-primary group">
+            <a 
+              href="#contact" 
+              onClick={(e) => handleLinkClick(e, "#contact")} 
+              className="flex items-center gap-2 font-sans text-lg font-medium text-accent-primary group"
+            >
               Start a Project
               <ArrowUpRight size={20} className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
             </a>
