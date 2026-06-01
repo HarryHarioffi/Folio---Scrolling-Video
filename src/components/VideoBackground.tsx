@@ -133,26 +133,51 @@ export default function VideoBackground({
     const preloadFrames = async () => {
       resizeCanvas();
 
-      // Image loader with off-thread GPU decoding
+      // Throttled async runner to maintain controlled browser connection concurrency
+      const asyncPool = async <T, R>(
+        concurrency: number,
+        iterable: T[],
+        iteratorFn: (item: T) => Promise<R>
+      ): Promise<R[]> => {
+        const results: Promise<R>[] = [];
+        const executing: Promise<any>[] = [];
+        
+        for (const item of iterable) {
+          if (isCancelled) break;
+          const p = Promise.resolve().then(() => iteratorFn(item));
+          results.push(p);
+          
+          if (concurrency <= iterable.length) {
+            const e: Promise<any> = p.then(() => executing.splice(executing.indexOf(e), 1));
+            executing.push(e);
+            if (executing.length >= concurrency) {
+              await Promise.race(executing);
+            }
+          }
+        }
+        return Promise.all(results);
+      };
+
+      // Decoupled Image loader with off-thread asynchronous GPU decoding
       const loadFrame = (vIdx: number, fIdx: number): Promise<HTMLImageElement> => {
         return new Promise((resolve, reject) => {
           const img = new Image();
           const frameNumber = String(fIdx + 1).padStart(3, "0");
           img.src = `/frames/video${vIdx + 1}/frame_${frameNumber}.png`;
 
-          img.onload = async () => {
-            try {
-              await img.decode();
-              if (!isCancelled) {
-                framesCache[vIdx][fIdx] = img;
-              }
-              resolve(img);
-            } catch (err) {
-              if (!isCancelled) {
-                framesCache[vIdx][fIdx] = img;
-              }
-              resolve(img);
+          img.onload = () => {
+            // Instantly store the image in cache so it's immediately drawable
+            if (!isCancelled) {
+              framesCache[vIdx][fIdx] = img;
             }
+            
+            // Resolve immediately to free the network concurrency slot
+            resolve(img);
+            
+            // Perform background off-thread GPU decoding to ensure butter-smooth scrub paint
+            img.decode().catch(() => {
+              // Silence decode error (supported browsers will pre-render, others fall back gracefully)
+            });
           };
 
           img.onerror = (err) => {
@@ -163,8 +188,9 @@ export default function VideoBackground({
 
       // TIER 1 (Critical Path): Load all 150 frames of Video 1 (First to second section transition)
       let tier1Loaded = 0;
+      const tier1Indices = Array.from({ length: TOTAL_FRAMES }, (_, i) => i);
 
-      const tier1Promises = Array.from({ length: TOTAL_FRAMES }, (_, i) => i).map(async (fIdx) => {
+      await asyncPool(8, tier1Indices, async (fIdx) => {
         try {
           await loadFrame(0, fIdx);
         } catch (e) {
@@ -176,8 +202,6 @@ export default function VideoBackground({
           }
         }
       });
-
-      await Promise.all(tier1Promises);
 
       if (isCancelled) return;
 
@@ -191,51 +215,93 @@ export default function VideoBackground({
         }
       }, 250);
 
-      // TIER 2: Sequentially background-load Videos 2, 3, 4, and 5
+      // TIER 2 & TIER 3: Background preloading of remaining videos
       const loadRemainingVideos = async () => {
-        for (let v = 1; v < VIDEO_COUNT; v++) {
-          if (isCancelled) break;
+        // Step 1: Upfront Skeleton loading for Videos 2, 3, 4, 5.
+        // We fetch every 4th frame (indices 0, 4, 8, ..., 148).
+        const skeletonIndices: number[] = [];
+        for (let i = 0; i < TOTAL_FRAMES; i += 4) {
+          skeletonIndices.push(i);
+        }
 
-          const tier2Indices: number[] = [];
-          for (let i = 0; i < TOTAL_FRAMES; i += 3) {
-            tier2Indices.push(i);
+        const skeletonTasks: { vIdx: number; fIdx: number }[] = [];
+        for (let v = 1; v < VIDEO_COUNT; v++) {
+          for (const fIdx of skeletonIndices) {
+            skeletonTasks.push({ vIdx: v, fIdx });
           }
-          const tier3Indices: number[] = [];
-          for (let i = 0; i < TOTAL_FRAMES; i++) {
-            if (!tier2Indices.includes(i)) {
-              tier3Indices.push(i);
+        }
+
+        // Load all skeletons with concurrency limit of 6
+        await asyncPool(6, skeletonTasks, async (task) => {
+          if (isCancelled) return;
+          try {
+            await loadFrame(task.vIdx, task.fIdx);
+            // If the user has scrolled to this video's zone, redraw active canvas frame immediately
+            if (currentVideoIndex === task.vIdx && canvasRef.current) {
+              drawFrame(framesCache, canvasRef.current, ctx, currentVideoIndex, currentFrameIndex);
+            }
+          } catch (e) {
+            // Silence load error
+          }
+        });
+
+        if (isCancelled) return;
+
+        // Step 2: Dynamic Priority Queue for remaining in-between frames (600 total)
+        const remainingTasks: { vIdx: number; fIdx: number }[] = [];
+        for (let v = 1; v < VIDEO_COUNT; v++) {
+          for (let f = 0; f < TOTAL_FRAMES; f++) {
+            if (!skeletonIndices.includes(f)) {
+              remainingTasks.push({ vIdx: v, fIdx: f });
             }
           }
+        }
 
-          const loadBatch = async (indices: number[], batchSize: number, delayMs: number) => {
-            for (let i = 0; i < indices.length; i += batchSize) {
-              if (isCancelled) break;
-              const batch = indices.slice(i, i + batchSize);
-              await Promise.all(
-                batch.map(async (fIdx) => {
-                  try {
-                    await loadFrame(v, fIdx);
-                  } catch (e) {
-                    // Silence error
-                  }
-                })
-              );
+        const workerCount = 4;
+        const runWorker = async () => {
+          while (!isCancelled && remainingTasks.length > 0) {
+            let bestTaskIndex = -1;
+            let highestPriority = -Infinity;
 
-              // Live-redraw active frame if user is scrolled in this video's zone
-              if (canvasRef.current && currentVideoIndex === v) {
+            // Search the remaining tasks to prioritize the most relevant frames
+            for (let i = 0; i < remainingTasks.length; i++) {
+              const task = remainingTasks[i];
+              // Video distance: prioritize the currently active video, then adjacent ones
+              const vDist = Math.abs(task.vIdx - currentVideoIndex);
+              // Frame distance: prioritize frames closer to the current frame index
+              const fDist = Math.abs(task.fIdx - currentFrameIndex);
+
+              // Video distance is highly weighted so workers load the current video first.
+              const priority = -(vDist * 10000 + fDist);
+
+              if (priority > highestPriority) {
+                highestPriority = priority;
+                bestTaskIndex = i;
+              }
+            }
+
+            if (bestTaskIndex === -1) break;
+
+            // Remove the prioritized task from the queue
+            const task = remainingTasks.splice(bestTaskIndex, 1)[0];
+            if (!task) break;
+
+            try {
+              await loadFrame(task.vIdx, task.fIdx);
+              if (currentVideoIndex === task.vIdx && canvasRef.current) {
                 drawFrame(framesCache, canvasRef.current, ctx, currentVideoIndex, currentFrameIndex);
               }
-              
-              await new Promise((resolve) => setTimeout(resolve, delayMs));
+            } catch (e) {
+              // Silence error
             }
-          };
 
-          // Playable skeleton (every 3rd frame)
-          await loadBatch(tier2Indices, 4, 35);
-          if (isCancelled) break;
-          // High fidelity in-between frames
-          await loadBatch(tier3Indices, 3, 70);
-        }
+            // Yield control briefly to prevent main thread blocking
+            await new Promise((resolve) => setTimeout(resolve, 5));
+          }
+        };
+
+        // Start concurrent prioritized workers
+        await Promise.all(Array.from({ length: workerCount }, runWorker));
       };
 
       loadRemainingVideos();
