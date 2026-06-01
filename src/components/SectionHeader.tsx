@@ -24,7 +24,7 @@ export default function SectionHeader({ label, title, id, adaptiveText }: Sectio
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: "-80px" }}
       transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
-      className="video-readable max-w-4xl mb-16"
+      className="video-readable max-w-4xl mb-24 md:mb-32"
     >
       <div className={`video-readable-accent font-mono text-[11px] uppercase tracking-[0.14em] mb-4 ${cAccent}`}>
         {label}

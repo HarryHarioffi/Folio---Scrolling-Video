@@ -21,7 +21,7 @@ export default function ContactSection() {
           transition={{ duration: 0.7 }}
           className="w-full"
         >
-          <h2 data-video-readable="" className="video-readable video-readable-display video-readable-primary font-display text-[clamp(2.5rem,5.5vw,5.5rem)] leading-[0.88] mb-12 uppercase max-w-4xl">
+          <h2 data-video-readable="" className="video-readable video-readable-display video-readable-primary font-display text-[clamp(2.5rem,5.5vw,5.5rem)] leading-[0.88] mb-24 md:mb-32 uppercase max-w-4xl">
             {CONTACT_TITLE}
           </h2>
         </motion.div>
