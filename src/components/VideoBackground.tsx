@@ -161,11 +161,10 @@ export default function VideoBackground({
         });
       };
 
-      // TIER 1 (Critical Path): Load first 50 frames of Video 1 for the Hero section
-      const HERO_LOAD_COUNT = 50;
+      // TIER 1 (Critical Path): Load all 150 frames of Video 1 (First to second section transition)
       let tier1Loaded = 0;
 
-      const tier1Promises = Array.from({ length: HERO_LOAD_COUNT }, (_, i) => i).map(async (fIdx) => {
+      const tier1Promises = Array.from({ length: TOTAL_FRAMES }, (_, i) => i).map(async (fIdx) => {
         try {
           await loadFrame(0, fIdx);
         } catch (e) {
@@ -173,7 +172,7 @@ export default function VideoBackground({
         } finally {
           if (!isCancelled) {
             tier1Loaded++;
-            onProgress(Math.round((tier1Loaded / HERO_LOAD_COUNT) * 100));
+            onProgress(Math.round((tier1Loaded / TOTAL_FRAMES) * 100));
           }
         }
       });
@@ -192,70 +191,54 @@ export default function VideoBackground({
         }
       }, 250);
 
-      // TIER 2: Load remaining frames of Video 1 in the background
-      const loadVideoBackground = async (vIdx: number, start: number, end: number) => {
-        for (let i = start; i < end; i++) {
+      // TIER 2: Sequentially background-load Videos 2, 3, 4, and 5
+      const loadRemainingVideos = async () => {
+        for (let v = 1; v < VIDEO_COUNT; v++) {
           if (isCancelled) break;
-          try {
-            await loadFrame(vIdx, i);
-          } catch (e) {
-            // Silence warning
+
+          const tier2Indices: number[] = [];
+          for (let i = 0; i < TOTAL_FRAMES; i += 3) {
+            tier2Indices.push(i);
           }
+          const tier3Indices: number[] = [];
+          for (let i = 0; i < TOTAL_FRAMES; i++) {
+            if (!tier2Indices.includes(i)) {
+              tier3Indices.push(i);
+            }
+          }
+
+          const loadBatch = async (indices: number[], batchSize: number, delayMs: number) => {
+            for (let i = 0; i < indices.length; i += batchSize) {
+              if (isCancelled) break;
+              const batch = indices.slice(i, i + batchSize);
+              await Promise.all(
+                batch.map(async (fIdx) => {
+                  try {
+                    await loadFrame(v, fIdx);
+                  } catch (e) {
+                    // Silence error
+                  }
+                })
+              );
+
+              // Live-redraw active frame if user is scrolled in this video's zone
+              if (canvasRef.current && currentVideoIndex === v) {
+                drawFrame(framesCache, canvasRef.current, ctx, currentVideoIndex, currentFrameIndex);
+              }
+              
+              await new Promise((resolve) => setTimeout(resolve, delayMs));
+            }
+          };
+
+          // Playable skeleton (every 3rd frame)
+          await loadBatch(tier2Indices, 4, 35);
+          if (isCancelled) break;
+          // High fidelity in-between frames
+          await loadBatch(tier3Indices, 3, 70);
         }
       };
 
-      loadVideoBackground(0, HERO_LOAD_COUNT, TOTAL_FRAMES).then(() => {
-        if (isCancelled) return;
-        
-        // TIER 3: Sequentially background-load Videos 2, 3, 4, and 5
-        const loadRemainingVideos = async () => {
-          for (let v = 1; v < VIDEO_COUNT; v++) {
-            if (isCancelled) break;
-
-            const tier2Indices: number[] = [];
-            for (let i = 0; i < TOTAL_FRAMES; i += 3) {
-              tier2Indices.push(i);
-            }
-            const tier3Indices: number[] = [];
-            for (let i = 0; i < TOTAL_FRAMES; i++) {
-              if (!tier2Indices.includes(i)) {
-                tier3Indices.push(i);
-              }
-            }
-
-            const loadBatch = async (indices: number[], batchSize: number, delayMs: number) => {
-              for (let i = 0; i < indices.length; i += batchSize) {
-                if (isCancelled) break;
-                const batch = indices.slice(i, i + batchSize);
-                await Promise.all(
-                  batch.map(async (fIdx) => {
-                    try {
-                      await loadFrame(v, fIdx);
-                    } catch (e) {
-                      // Silence error
-                    }
-                  })
-                );
-
-                // Live-redraw active frame if user is scrolled in this video's zone
-                if (canvasRef.current && currentVideoIndex === v) {
-                  drawFrame(framesCache, canvasRef.current, ctx, currentVideoIndex, currentFrameIndex);
-                }
-                
-                await new Promise((resolve) => setTimeout(resolve, delayMs));
-              }
-            };
-
-            // Playable skeleton (every 3rd frame)
-            await loadBatch(tier2Indices, 4, 35);
-            if (isCancelled) break;
-            // High fidelity in-between frames
-            await loadBatch(tier3Indices, 3, 70);
-          }
-        };
-
-        loadRemainingVideos();
-      });
+      loadRemainingVideos();
 
       // 4. Consecutive ScrollTrigger configurations for all 5 section transitions
       setTimeout(() => {
