@@ -46,7 +46,10 @@ export default function ContactSection() {
                 <a href={`mailto:${CONTACT_EMAIL}?subject=Start a Project`} className="bg-accent-primary text-white font-sans font-medium px-8 py-4 rounded-[2px] hover:brightness-110 transition-all duration-200 flex items-center gap-2 group cursor-pointer">
                   Start a Project <ArrowUpRight className="w-5 group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
                 </a>
-                <a href={`mailto:${CONTACT_EMAIL}?subject=Share a Brief`} className="border border-border-custom text-text-primary bg-transparent font-sans font-medium px-8 py-4 rounded-[2px] hover:border-accent-primary transition-all duration-200 flex items-center gap-2 group cursor-pointer">
+                <a 
+                  href={`mailto:${CONTACT_EMAIL}?subject=Share a Brief`} 
+                  className="border border-transparent text-white bg-transparent font-sans font-medium px-8 py-4 rounded-[2px] hover:border-accent-primary transition-all duration-200 flex items-center gap-2 group cursor-pointer"
+                >
                   Share a Brief <ArrowUpRight className="w-5 group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
                 </a>
               </div>
