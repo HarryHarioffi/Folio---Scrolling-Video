@@ -22,12 +22,13 @@ export default function CustomCursor() {
       const target = e.target as HTMLElement;
       if (!target) return;
 
-      // Smart check: matches common interactive elements or anything styled with a pointer cursor
-      const isClickable =
-        target.closest('a, button, [role="button"], input[type="submit"], input[type="button"], [onclick], .cursor-pointer, [data-interactive]') ||
-        window.getComputedStyle(target).cursor === "pointer";
+      // High-performance check: matches common interactive elements or cursor pointer utilities
+      // without triggering expensive layout style recalculation reflows
+      const isClickable = !!target.closest(
+        'a, button, [role="button"], input[type="submit"], input[type="button"], select, textarea, [onclick], .cursor-pointer, [data-interactive], .group\\/scroll, .group\\/card'
+      );
 
-      setIsHovered(!!isClickable);
+      setIsHovered(isClickable);
     };
 
     window.addEventListener("mousemove", moveCursor);
