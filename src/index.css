@@ -1,0 +1,160 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg-void: #FAF8F5;
+  --color-bg-surface: #F3EFEA;
+  --color-bg-raised: #EAE2D8;
+  --color-accent-primary: #A23B12;
+  --color-accent-orange: #E65100;
+  --color-accent-glow: rgba(162, 59, 18, 0.10);
+  --color-text-primary: #1A1513;
+  --color-text-secondary: #5C524E;
+  --color-text-muted: #9C928D;
+  --color-border-custom: rgba(26, 21, 19, 0.08);
+  --color-stat-green: #166534;
+
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Bebas Neue", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+:root {
+  --bg-void: #FAF8F5;
+  --bg-surface: #F3EFEA;
+  --bg-raised: #EAE2D8;
+  --accent-primary: #A23B12;
+  --accent-orange: #E65100;
+  --accent-glow: rgba(162, 59, 18, 0.10);
+  --text-primary: #1A1513;
+  --text-secondary: #5C524E;
+  --text-muted: #9C928D;
+  --border: rgba(26, 21, 19, 0.08);
+  --stat-green: #166534;
+}
+
+body {
+  background-color: var(--bg-void);
+  color: var(--text-primary);
+  font-family: 'DM Sans', sans-serif;
+  overflow-x: hidden;
+}
+
+@keyframes marquee {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-33.33%); }
+}
+
+.animate-marquee {
+  animation: marquee 40s linear infinite;
+  will-change: transform;
+}
+
+.animate-marquee:hover {
+  animation-play-state: paused;
+}
+
+.folio-dot::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  right: -8px;
+  width: 6px;
+  height: 6px;
+  background-color: var(--accent-primary);
+  border-radius: 50%;
+}
+
+/* Text readability over video background */
+.folio-text-shadow {
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.15), 0 0 12px rgba(250, 248, 245, 0.3);
+}
+
+/* =============================================
+   Video Blend System
+   Section-level mix-blend-mode: difference
+   ============================================= */
+
+/* Blend variables — white-based palette that inverts via difference */
+.video-blend-stage,
+.video-readable {
+  --blend-primary: #FFFFFF;
+  --blend-secondary: rgba(255, 255, 255, 0.78);
+  --blend-muted: rgba(255, 255, 255, 0.56);
+  --blend-accent: #E65100;
+  --blend-border: rgba(255, 255, 255, 0.34);
+  --blend-panel-bg: rgba(250, 248, 245, 0.02);
+}
+
+/* Section-level blend — entire section composites against the video */
+.video-blend-stage {
+  mix-blend-mode: difference;
+}
+
+/* Inner containers — also difference by default */
+.video-readable {
+  mix-blend-mode: difference;
+}
+
+/* Nested inside a blend stage → reset to normal 
+   (double-difference cancels out, so inner elements render normally 
+    within the already-blended section context) */
+.video-blend-stage .video-readable {
+  mix-blend-mode: normal;
+}
+
+/* Semantic color classes */
+.video-readable-primary,
+.video-readable-secondary,
+.video-readable-muted,
+.video-readable-accent {
+  text-shadow: none;
+  transition: opacity 260ms ease, color 260ms ease, border-color 260ms ease, background-color 260ms ease;
+}
+
+.video-readable-primary {
+  color: var(--blend-primary);
+}
+
+.video-readable-secondary {
+  color: var(--blend-secondary);
+}
+
+.video-readable-muted {
+  color: var(--blend-muted);
+}
+
+.video-readable-accent {
+  color: var(--blend-accent);
+}
+
+.video-readable-border {
+  border-color: var(--blend-border);
+}
+
+.video-readable-panel {
+  background-color: var(--blend-panel-bg);
+}
+
+.video-readable-display {
+  letter-spacing: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Graceful fallback for browsers without mix-blend-mode */
+@supports not (mix-blend-mode: difference) {
+  .video-readable-primary {
+    color: var(--text-primary);
+  }
+
+  .video-readable-secondary {
+    color: var(--text-secondary);
+  }
+
+  .video-readable-muted {
+    color: var(--text-muted);
+  }
+
+  .video-readable-accent {
+    color: var(--accent-orange);
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Folio",
+  "description": "Full-screen scroll-driven hero page for Folio - Design-Led Digital Studio",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
