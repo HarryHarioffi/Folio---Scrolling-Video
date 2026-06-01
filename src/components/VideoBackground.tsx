@@ -37,7 +37,9 @@ export default function VideoBackground({
 
     const framesList: (HTMLImageElement | null)[] = Array(TOTAL_FRAMES).fill(null);
     let st: ReturnType<typeof ScrollTrigger.create> | null = null;
+    let anim: gsap.core.Tween | null = null;
     let currentFrameIndex = 0;
+    let lastDrawnIndex = 0;
     let isCancelled = false;
 
     // Resize canvas to viewport
@@ -49,7 +51,7 @@ export default function VideoBackground({
       }
     };
 
-    // Closest loaded-frame fallback draw function
+    // Closest loaded-frame fallback draw function with distance constraints
     const drawFrame = (
       frms: (HTMLImageElement | null)[],
       cvs: HTMLCanvasElement,
@@ -57,6 +59,7 @@ export default function VideoBackground({
       index: number
     ) => {
       let frame = frms[index];
+      let drawIndex = index;
 
       // Fallback search: find the closest loaded frame in the cache
       if (!frame || !frame.complete || frame.naturalWidth === 0) {
@@ -74,12 +77,26 @@ export default function VideoBackground({
           }
         }
 
-        if (closestIndex !== -1) {
+        // Only fall back to closest frame if it is within 5 frames of target index
+        if (closestIndex !== -1 && minDistance <= 5) {
           frame = frms[closestIndex];
+          drawIndex = closestIndex;
+        } else {
+          // Otherwise, hold on the last successfully drawn frame
+          frame = frms[lastDrawnIndex];
+          drawIndex = lastDrawnIndex;
         }
       }
 
-      if (!frame) return;
+      // Hard fallback: if even the last drawn frame is invalid, default to initial frame (pre-loaded on start)
+      if (!frame || !frame.complete || frame.naturalWidth === 0) {
+        if (frms[0] && frms[0].complete && frms[0].naturalWidth > 0) {
+          frame = frms[0];
+          drawIndex = 0;
+        } else {
+          return;
+        }
+      }
 
       const cw = cvs.width;
       const ch = cvs.height;
@@ -97,6 +114,9 @@ export default function VideoBackground({
 
       context.clearRect(0, 0, cw, ch);
       context.drawImage(frame, sx, sy, sw, sh);
+
+      // Cache the index of the frame that was actually painted
+      lastDrawnIndex = drawIndex;
     };
 
     // Parallel preloading function
@@ -134,8 +154,9 @@ export default function VideoBackground({
         });
       };
 
-      // TIER 1: Critical path (Frames 1-3)
-      const tier1Indices = [0, 1, 2];
+      // TIER 1: Critical path (First 50 frames to cover the Hero section scroll)
+      const HERO_FRAMES_COUNT = 50;
+      const tier1Indices = Array.from({ length: HERO_FRAMES_COUNT }, (_, i) => i);
       let tier1Loaded = 0;
 
       const tier1Promises = tier1Indices.map(async (idx) => {
@@ -151,7 +172,7 @@ export default function VideoBackground({
         }
       });
 
-      // Wait for critical frames to download and decode
+      // Wait for critical Hero section frames to download and decode
       await Promise.all(tier1Promises);
 
       if (isCancelled) return;
@@ -166,16 +187,16 @@ export default function VideoBackground({
         }
       }, 250);
 
-      // TIER 2: Playable Core Path (Load every 3rd frame to establish playable sequence)
+      // TIER 2: Playable Core Path (Load every 3rd frame for the remaining frames to establish playable sequence)
       const tier2Indices: number[] = [];
-      for (let i = 5; i < TOTAL_FRAMES; i += 3) {
+      for (let i = HERO_FRAMES_COUNT; i < TOTAL_FRAMES; i += 3) {
         tier2Indices.push(i);
       }
 
       // TIER 3: High-Fidelity Path (Load remaining intermediate frames)
       const tier3Indices: number[] = [];
-      for (let i = 0; i < TOTAL_FRAMES; i++) {
-        if (!tier1Indices.includes(i) && !tier2Indices.includes(i)) {
+      for (let i = HERO_FRAMES_COUNT; i < TOTAL_FRAMES; i++) {
+        if (!tier2Indices.includes(i)) {
           tier3Indices.push(i);
         }
       }
@@ -212,26 +233,32 @@ export default function VideoBackground({
         loadBatchInBackground(tier3Indices, 3, 75);
       });
 
-      // Setup ScrollTrigger mapped scroll to frame index
+      // Setup ScrollTrigger mapped scroll to frame index via GSAP Tween (interpolates with scrub)
       setTimeout(() => {
         if (isCancelled) return;
         const fifthCard = document.querySelector("#capability-card-05");
-        st = ScrollTrigger.create({
-          trigger: document.body,
-          start: "top top",
-          end: () => {
-            if (fifthCard) {
-              const rect = fifthCard.getBoundingClientRect();
-              const absoluteBottom = rect.top + window.scrollY + rect.height;
-              return `top+=${absoluteBottom} top`;
-            }
-            return "40% top";
+        
+        const frameObj = { frame: 0 };
+        anim = gsap.to(frameObj, {
+          frame: TOTAL_FRAMES - 1,
+          ease: "none",
+          scrollTrigger: {
+            trigger: document.body,
+            start: "top top",
+            end: () => {
+              if (fifthCard) {
+                const rect = fifthCard.getBoundingClientRect();
+                const absoluteBottom = rect.top + window.scrollY + rect.height;
+                return `top+=${absoluteBottom} top`;
+              }
+              return "40% top";
+            },
+            scrub: 1.5, // Interia catch-up smoothing
           },
-          scrub: 1.5,
-          onUpdate: (self) => {
+          onUpdate: () => {
             if (isCancelled) return;
             const frameIndex = Math.min(
-              Math.floor(self.progress * (TOTAL_FRAMES - 1)),
+              Math.floor(frameObj.frame),
               TOTAL_FRAMES - 1
             );
             if (frameIndex !== currentFrameIndex) {
@@ -241,6 +268,7 @@ export default function VideoBackground({
           },
         });
 
+        st = anim.scrollTrigger || null;
         ScrollTrigger.refresh();
       }, 150);
     };
@@ -263,6 +291,7 @@ export default function VideoBackground({
       isCancelled = true;
       window.removeEventListener("resize", handleResize);
       if (resizeFrameId) cancelAnimationFrame(resizeFrameId);
+      anim?.kill();
       st?.kill();
       framesList.fill(null);
     };

@@ -158,3 +158,21 @@ body {
     color: var(--accent-orange);
   }
 }
+
+/* Faded blueprint grid background overlay */
+.bg-grid-pattern {
+  background-size: 50px 50px;
+  background-image: 
+    linear-gradient(to right, rgba(26, 21, 19, 0.075) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(26, 21, 19, 0.075) 1px, transparent 1px);
+  mask-image: radial-gradient(circle at center, black, transparent 80%);
+  -webkit-mask-image: radial-gradient(circle at center, black, transparent 80%);
+}
+
+/* Hide native cursor globally on desktop viewports when CustomCursor is active */
+@media (min-width: 768px) {
+  .custom-cursor-active,
+  .custom-cursor-active * {
+    cursor: none !important;
+  }
+}

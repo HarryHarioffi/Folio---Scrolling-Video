@@ -39,10 +39,13 @@ export default function OperatingModelSection() {
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true }}
                 transition={{ delay: i * 0.1, duration: 0.55 }}
-                className="video-readable video-readable-panel video-readable-border bg-bg-surface border border-border-custom p-6 rounded-[2px] hover:border-accent-primary transition-colors"
+                className="video-readable video-readable-panel video-readable-border bg-bg-surface/20 border border-border-custom p-6 rounded-[2px] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_12px_24px_rgba(26,21,19,0.03)] hover:border-accent-primary group flex flex-col"
               >
-                <h3 className="video-readable-primary font-sans text-base font-semibold mb-3">{item.title}</h3>
-                <p className="video-readable-secondary font-sans text-[13px] leading-relaxed">{item.body}</p>
+                <h3 className="video-readable-primary font-sans text-base font-semibold mb-3 transition-colors group-hover:text-accent-primary duration-300 flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-accent-primary scale-0 group-hover:scale-100 transition-transform duration-300 origin-center shrink-0" />
+                  {item.title}
+                </h3>
+                <p className="video-readable-secondary font-sans text-[13px] leading-relaxed pl-0 group-hover:pl-3.5 transition-all duration-300">{item.body}</p>
               </motion.div>
             ))}
           </div>

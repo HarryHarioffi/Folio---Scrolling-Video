@@ -7,6 +7,8 @@
  */
 
 import { useEffect, useState } from "react";
+import { ReactLenis } from "lenis/react";
+import "lenis/dist/lenis.css";
 import Loader from "./components/Loader";
 import Navbar from "./components/Navbar";
 import MobileMenu from "./components/MobileMenu";
@@ -18,6 +20,7 @@ import OperatingModelSection from "./components/sections/OperatingModelSection";
 import WorkSection from "./components/sections/WorkSection";
 import AboutSection from "./components/sections/AboutSection";
 import ContactSection from "./components/sections/ContactSection";
+import CustomCursor from "./components/ui/CustomCursor";
 
 export default function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -28,37 +31,44 @@ export default function App() {
   useEffect(() => {
     const shouldLock = isLoading || isMenuOpen;
     document.documentElement.style.overflow = shouldLock ? "hidden" : "";
+    document.body.style.overflow = shouldLock ? "hidden" : "";
     return () => {
       document.documentElement.style.overflow = "";
+      document.body.style.overflow = "";
     };
   }, [isLoading, isMenuOpen]);
 
   return (
-    <div className="min-h-screen bg-bg-void antialiased">
-      {/* Loader overlay */}
-      <Loader progress={loadProgress} isComplete={!isLoading} />
+    <ReactLenis root>
+      <div className="min-h-screen bg-bg-void antialiased">
+        {/* Global high-tech target reticle custom cursor */}
+        <CustomCursor />
 
-      {/* Video background (canvas frame renderer) */}
-      <VideoBackground
-        isLoading={isLoading}
-        onProgress={setLoadProgress}
-        onComplete={() => setIsLoading(false)}
-      />
+        {/* Loader overlay */}
+        <Loader progress={loadProgress} isComplete={!isLoading} />
 
-      {/* Navigation */}
-      <Navbar toggleMenu={() => setIsMenuOpen((v) => !v)} />
-      <MobileMenu isOpen={isMenuOpen} toggleMenu={() => setIsMenuOpen(false)} />
+        {/* Video background (canvas frame renderer) */}
+        <VideoBackground
+          isLoading={isLoading}
+          onProgress={setLoadProgress}
+          onComplete={() => setIsLoading(false)}
+        />
 
-      {/* Page sections */}
-      <main>
-        <Hero isLoading={isLoading} />
-        <Marquee />
-        <CapabilitiesSection />
-        <OperatingModelSection />
-        <WorkSection />
-        <AboutSection />
-        <ContactSection />
-      </main>
-    </div>
+        {/* Navigation */}
+        <Navbar toggleMenu={() => setIsMenuOpen((v) => !v)} />
+        <MobileMenu isOpen={isMenuOpen} toggleMenu={() => setIsMenuOpen(false)} />
+
+        {/* Page sections */}
+        <main>
+          <Hero isLoading={isLoading} />
+          <Marquee />
+          <CapabilitiesSection />
+          <OperatingModelSection />
+          <WorkSection />
+          <AboutSection />
+          <ContactSection />
+        </main>
+      </div>
+    </ReactLenis>
   );
 }
