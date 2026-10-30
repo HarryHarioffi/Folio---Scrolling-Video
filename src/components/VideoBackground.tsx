@@ -3,19 +3,34 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Multi-video scroll-driven background using canvas frame rendering.
- * Preloads 5 PNG frame sequences in a staged background pipeline
- * and maps scrolling zones to video indices and frame indices.
+ * Loads 5 WebP frame sequences on demand and maps scrolling zones
+ * to video indices and frame indices.
  */
 
 import { motion } from "motion/react";
 import { useRef, useLayoutEffect } from "react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
+import {
+  FRAME_H,
+  FRAME_W,
+  type FrameSet,
+  TOTAL_FRAMES,
+  VIDEO_COUNT,
+  frameUrl,
+  pickFrameSet,
+} from "../lib/frames";
 
 gsap.registerPlugin(ScrollTrigger);
 
-const TOTAL_FRAMES = 150;
-const VIDEO_COUNT = 5;
+// Every 4th frame of a video is its "skeleton": enough to scrub without gaps
+const SKELETON_STEP = 4;
+const MAX_DPR = 2;
+const WORKER_COUNT = 6;
+
+type FrameCache = (HTMLImageElement | null)[][];
+
+const isSkeleton = (fIdx: number) => fIdx % SKELETON_STEP === 0;
 
 interface VideoBackgroundProps {
   isLoading: boolean;
@@ -36,177 +51,195 @@ export default function VideoBackground({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // 2D Array Cache: framesCache[videoIndex][frameIndex]
-    const framesCache: (HTMLImageElement | null)[][] = Array.from(
-      { length: VIDEO_COUNT },
-      () => Array(TOTAL_FRAMES).fill(null)
-    );
+    // Cache per frame set: framesCache[set][videoIndex][frameIndex]
+    const emptyCache = (): FrameCache =>
+      Array.from({ length: VIDEO_COUNT }, () => Array(TOTAL_FRAMES).fill(null));
+    const framesCache: Record<FrameSet, FrameCache> = {
+      landscape: emptyCache(),
+      portrait: emptyCache(),
+    };
+    // Frames already requested per set, keyed by videoIndex * TOTAL_FRAMES + frameIndex
+    const requested: Record<FrameSet, Set<number>> = {
+      landscape: new Set(),
+      portrait: new Set(),
+    };
 
     let activeScrollTriggers: ReturnType<typeof ScrollTrigger.create>[] = [];
     let activeTweens: gsap.core.Tween[] = [];
+    let activeSet = pickFrameSet(window.innerWidth, window.innerHeight);
     let currentVideoIndex = 0;
     let currentFrameIndex = 0;
-    let lastDrawnVideoIndex = 0;
-    let lastDrawnFrameIndex = 0;
+    let lastDrawnFrame: HTMLImageElement | null = null;
+    let hasScrolled = false;
     let isCancelled = false;
 
-    // Resize canvas to viewport and paint current frame
-    const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      drawFrame(framesCache, canvas, ctx, currentVideoIndex, currentFrameIndex);
+    // Idle loader workers park here until the scroll position or frame set changes
+    let wakeWorkers: () => void = () => {};
+    let wakeSignal = new Promise<void>((resolve) => (wakeWorkers = resolve));
+    const notifyWorkers = () => {
+      const resolve = wakeWorkers;
+      wakeSignal = new Promise<void>((r) => (wakeWorkers = r));
+      resolve();
     };
 
-    // Draw frame function with robust fallback checks
-    const drawFrame = (
-      frms: (HTMLImageElement | null)[][],
-      cvs: HTMLCanvasElement,
-      context: CanvasRenderingContext2D,
-      videoIdx: number,
-      frameIdx: number
-    ) => {
-      let frame = frms[videoIdx][frameIdx];
-      let drawVideoIndex = videoIdx;
-      let drawFrameIndex = frameIdx;
+    const isDrawable = (img: HTMLImageElement | null): img is HTMLImageElement =>
+      !!img && img.complete && img.naturalWidth > 0;
 
-      // Fallback search: find the closest loaded frame in the current video sequence
-      if (!frame || !frame.complete || frame.naturalWidth === 0) {
-        let closestIndex = -1;
-        let minDistance = Infinity;
-
-        for (let i = 0; i < TOTAL_FRAMES; i++) {
-          const f = frms[videoIdx][i];
-          if (f && f.complete && f.naturalWidth > 0) {
-            const dist = Math.abs(i - frameIdx);
-            if (dist < minDistance) {
-              minDistance = dist;
-              closestIndex = i;
-            }
-          }
+    // Closest loaded frame of a video within maxDistance, preferring the active set
+    const findLoadedFrame = (videoIdx: number, frameIdx: number, maxDistance: number) => {
+      const sets: FrameSet[] = activeSet === "landscape" ? ["landscape", "portrait"] : ["portrait", "landscape"];
+      for (const set of sets) {
+        const frames = framesCache[set][videoIdx];
+        for (let d = 0; d <= maxDistance; d++) {
+          const before = frames[frameIdx - d];
+          if (isDrawable(before)) return before;
+          const after = frames[frameIdx + d];
+          if (isDrawable(after)) return after;
         }
+      }
+      return null;
+    };
 
-        if (closestIndex !== -1 && minDistance <= 8) {
-          frame = frms[videoIdx][closestIndex];
-          drawVideoIndex = videoIdx;
-          drawFrameIndex = closestIndex;
-        } else {
-          // If no frame is found, hold on the last successfully painted frame
-          const lastFrame = frms[lastDrawnVideoIndex][lastDrawnFrameIndex];
-          if (lastFrame && lastFrame.complete && lastFrame.naturalWidth > 0) {
-            frame = lastFrame;
-            drawVideoIndex = lastDrawnVideoIndex;
-            drawFrameIndex = lastDrawnFrameIndex;
-          } else if (frms[videoIdx][0] && frms[videoIdx][0]!.complete && frms[videoIdx][0]!.naturalWidth > 0) {
-            // Absolute fallback: first frame of requested video
-            frame = frms[videoIdx][0];
-            drawVideoIndex = videoIdx;
-            drawFrameIndex = 0;
-          } else {
-            return;
+    // Draw frame with fallbacks: nearest loaded frame, then the last painted one
+    const drawFrame = (videoIdx: number, frameIdx: number) => {
+      const frame =
+        findLoadedFrame(videoIdx, frameIdx, 8) ??
+        (isDrawable(lastDrawnFrame) ? lastDrawnFrame : findLoadedFrame(videoIdx, 0, TOTAL_FRAMES));
+      if (!frame) return;
+
+      const cw = canvas.width;
+      const ch = canvas.height;
+
+      // Object-cover scaling of the full 1920×1080 frame. A portrait frame is drawn
+      // where its centre slice sits in the full frame, so both sets line up exactly.
+      const scale = Math.max(cw / FRAME_W, ch / FRAME_H);
+      const sliceScale = FRAME_H / frame.naturalHeight;
+      const sliceW = frame.naturalWidth * sliceScale;
+      const sx = (cw - FRAME_W * scale) / 2 + ((FRAME_W - sliceW) / 2) * scale;
+      const sy = (ch - FRAME_H * scale) / 2;
+
+      ctx.clearRect(0, 0, cw, ch);
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(frame, sx, sy, sliceW * scale, FRAME_H * scale);
+
+      lastDrawnFrame = frame;
+    };
+
+    // Size the canvas backing store to device pixels (capped) for sharp frames on Retina screens
+    const resizeCanvas = () => {
+      const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
+      canvas.width = Math.round(window.innerWidth * dpr);
+      canvas.height = Math.round(window.innerHeight * dpr);
+
+      const nextSet = pickFrameSet(window.innerWidth, window.innerHeight);
+      if (nextSet !== activeSet) {
+        activeSet = nextSet;
+        notifyWorkers();
+      }
+      drawFrame(currentVideoIndex, currentFrameIndex);
+    };
+
+    // Image loader: the frame is drawable as soon as it loads
+    const loadFrame = (set: FrameSet, vIdx: number, fIdx: number): Promise<void> => {
+      requested[set].add(vIdx * TOTAL_FRAMES + fIdx);
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.src = frameUrl(set, vIdx, fIdx);
+        img.onload = () => {
+          if (!isCancelled) {
+            framesCache[set][vIdx][fIdx] = img;
+            if (vIdx === currentVideoIndex) drawFrame(currentVideoIndex, currentFrameIndex);
+          }
+
+          // Resolve immediately to free the network slot; hidden tabs can hold decode() back
+          resolve();
+
+          // Background off-thread decoding so scrubbing paints without a decode stall
+          img.decode().catch(() => {
+            // Unsupported browsers decode at first paint instead
+          });
+        };
+        img.onerror = () => resolve();
+      });
+    };
+
+    // Pick the most useful frame still to load. Until the visitor scrolls, only the
+    // first video and the next video's skeleton load; after that, everything does,
+    // nearest video first and skeleton frames before in-between frames.
+    const nextTask = (): { vIdx: number; fIdx: number } | null => {
+      let best: { vIdx: number; fIdx: number } | null = null;
+      let bestScore = Infinity;
+      for (let vIdx = 0; vIdx < VIDEO_COUNT; vIdx++) {
+        const vDist = Math.abs(vIdx - currentVideoIndex);
+        const isNext = vIdx === currentVideoIndex + 1;
+        if (vDist > 0 && !hasScrolled && !isNext) continue;
+
+        for (let fIdx = 0; fIdx < TOTAL_FRAMES; fIdx++) {
+          if (requested[activeSet].has(vIdx * TOTAL_FRAMES + fIdx)) continue;
+          if (isNext && !hasScrolled && !isSkeleton(fIdx)) continue;
+
+          // Entering a video from above starts at frame 0, from below at the last frame
+          const fDist =
+            vDist === 0
+              ? Math.abs(fIdx - currentFrameIndex)
+              : vIdx > currentVideoIndex
+                ? fIdx
+                : TOTAL_FRAMES - 1 - fIdx;
+          const score = vDist * 10000 + (vDist > 0 && !isSkeleton(fIdx) ? 5000 : 0) + fDist;
+          if (score < bestScore) {
+            bestScore = score;
+            best = { vIdx, fIdx };
           }
         }
       }
-
-      const cw = cvs.width;
-      const ch = cvs.height;
-      const fw = frame.naturalWidth;
-      const fh = frame.naturalHeight;
-
-      if (fw === 0 || fh === 0) return;
-
-      // Object-cover scaling
-      const scale = Math.max(cw / fw, ch / fh);
-      const sw = fw * scale;
-      const sh = fh * scale;
-      const sx = (cw - sw) / 2;
-      const sy = (ch - sh) / 2;
-
-      context.clearRect(0, 0, cw, ch);
-      context.drawImage(frame, sx, sy, sw, sh);
-
-      // Cache painted coordinates for fallback tracking
-      lastDrawnVideoIndex = drawVideoIndex;
-      lastDrawnFrameIndex = drawFrameIndex;
+      return best;
     };
 
-    // Staged asynchronous frame preloading pipeline
+    const runWorker = async () => {
+      while (!isCancelled) {
+        const task = nextTask();
+        if (!task) {
+          await wakeSignal;
+          continue;
+        }
+        await loadFrame(activeSet, task.vIdx, task.fIdx);
+      }
+    };
+
+    const handleFirstScroll = () => {
+      if (window.scrollY < window.innerHeight * 0.25) return;
+      hasScrolled = true;
+      window.removeEventListener("scroll", handleFirstScroll);
+      notifyWorkers();
+    };
+
+    const setVideoPosition = (videoIdx: number, frameIdx: number) => {
+      const videoChanged = videoIdx !== currentVideoIndex;
+      currentVideoIndex = videoIdx;
+      currentFrameIndex = frameIdx;
+      drawFrame(videoIdx, frameIdx);
+      if (videoChanged) notifyWorkers();
+    };
+
     const preloadFrames = async () => {
       resizeCanvas();
 
-      // Throttled async runner to maintain controlled browser connection concurrency
-      const asyncPool = async <T, R>(
-        concurrency: number,
-        iterable: T[],
-        iteratorFn: (item: T) => Promise<R>
-      ): Promise<R[]> => {
-        const results: Promise<R>[] = [];
-        const executing: Promise<any>[] = [];
-        
-        for (const item of iterable) {
-          if (isCancelled) break;
-          const p = Promise.resolve().then(() => iteratorFn(item));
-          results.push(p);
-          
-          if (concurrency <= iterable.length) {
-            const e: Promise<any> = p.then(() => executing.splice(executing.indexOf(e), 1));
-            executing.push(e);
-            if (executing.length >= concurrency) {
-              await Promise.race(executing);
-            }
-          }
+      // Critical path: the skeleton of video 1 (38 frames) before the loader opens
+      const skeleton = Array.from({ length: TOTAL_FRAMES }, (_, i) => i).filter(isSkeleton);
+      let loaded = 0;
+      const queue = [...skeleton];
+      const loadSkeleton = async () => {
+        while (!isCancelled && queue.length > 0) {
+          await loadFrame(activeSet, 0, queue.shift()!);
+          if (!isCancelled) onProgress(Math.round((++loaded / skeleton.length) * 100));
         }
-        return Promise.all(results);
       };
-
-      // Decoupled Image loader with off-thread asynchronous GPU decoding
-      const loadFrame = (vIdx: number, fIdx: number): Promise<HTMLImageElement> => {
-        return new Promise((resolve, reject) => {
-          const img = new Image();
-          const frameNumber = String(fIdx + 1).padStart(3, "0");
-          img.src = `/frames/video${vIdx + 1}/frame_${frameNumber}.png`;
-
-          img.onload = () => {
-            // Instantly store the image in cache so it's immediately drawable
-            if (!isCancelled) {
-              framesCache[vIdx][fIdx] = img;
-            }
-            
-            // Resolve immediately to free the network concurrency slot
-            resolve(img);
-            
-            // Perform background off-thread GPU decoding to ensure butter-smooth scrub paint
-            img.decode().catch(() => {
-              // Silence decode error (supported browsers will pre-render, others fall back gracefully)
-            });
-          };
-
-          img.onerror = (err) => {
-            reject(err);
-          };
-        });
-      };
-
-      // TIER 1 (Critical Path): Load all 150 frames of Video 1 (First to second section transition)
-      let tier1Loaded = 0;
-      const tier1Indices = Array.from({ length: TOTAL_FRAMES }, (_, i) => i);
-
-      await asyncPool(8, tier1Indices, async (fIdx) => {
-        try {
-          await loadFrame(0, fIdx);
-        } catch (e) {
-          // Swallow load error
-        } finally {
-          if (!isCancelled) {
-            tier1Loaded++;
-            onProgress(Math.round((tier1Loaded / TOTAL_FRAMES) * 100));
-          }
-        }
-      });
+      await Promise.all(Array.from({ length: WORKER_COUNT }, loadSkeleton));
 
       if (isCancelled) return;
 
       // Draw initial hero frame instantly
-      drawFrame(framesCache, canvas, ctx, 0, 0);
+      drawFrame(0, 0);
 
       // Dismiss loader and unlock UI
       setTimeout(() => {
@@ -215,98 +248,12 @@ export default function VideoBackground({
         }
       }, 250);
 
-      // TIER 2 & TIER 3: Background preloading of remaining videos
-      const loadRemainingVideos = async () => {
-        // Step 1: Upfront Skeleton loading for Videos 2, 3, 4, 5.
-        // We fetch every 4th frame (indices 0, 4, 8, ..., 148).
-        const skeletonIndices: number[] = [];
-        for (let i = 0; i < TOTAL_FRAMES; i += 4) {
-          skeletonIndices.push(i);
-        }
+      // Background loading of the remaining frames, in priority order
+      window.addEventListener("scroll", handleFirstScroll, { passive: true });
+      handleFirstScroll();
+      Array.from({ length: WORKER_COUNT }, runWorker);
 
-        const skeletonTasks: { vIdx: number; fIdx: number }[] = [];
-        for (let v = 1; v < VIDEO_COUNT; v++) {
-          for (const fIdx of skeletonIndices) {
-            skeletonTasks.push({ vIdx: v, fIdx });
-          }
-        }
-
-        // Load all skeletons with concurrency limit of 6
-        await asyncPool(6, skeletonTasks, async (task) => {
-          if (isCancelled) return;
-          try {
-            await loadFrame(task.vIdx, task.fIdx);
-            // If the user has scrolled to this video's zone, redraw active canvas frame immediately
-            if (currentVideoIndex === task.vIdx && canvasRef.current) {
-              drawFrame(framesCache, canvasRef.current, ctx, currentVideoIndex, currentFrameIndex);
-            }
-          } catch (e) {
-            // Silence load error
-          }
-        });
-
-        if (isCancelled) return;
-
-        // Step 2: Dynamic Priority Queue for remaining in-between frames (600 total)
-        const remainingTasks: { vIdx: number; fIdx: number }[] = [];
-        for (let v = 1; v < VIDEO_COUNT; v++) {
-          for (let f = 0; f < TOTAL_FRAMES; f++) {
-            if (!skeletonIndices.includes(f)) {
-              remainingTasks.push({ vIdx: v, fIdx: f });
-            }
-          }
-        }
-
-        const workerCount = 4;
-        const runWorker = async () => {
-          while (!isCancelled && remainingTasks.length > 0) {
-            let bestTaskIndex = -1;
-            let highestPriority = -Infinity;
-
-            // Search the remaining tasks to prioritize the most relevant frames
-            for (let i = 0; i < remainingTasks.length; i++) {
-              const task = remainingTasks[i];
-              // Video distance: prioritize the currently active video, then adjacent ones
-              const vDist = Math.abs(task.vIdx - currentVideoIndex);
-              // Frame distance: prioritize frames closer to the current frame index
-              const fDist = Math.abs(task.fIdx - currentFrameIndex);
-
-              // Video distance is highly weighted so workers load the current video first.
-              const priority = -(vDist * 10000 + fDist);
-
-              if (priority > highestPriority) {
-                highestPriority = priority;
-                bestTaskIndex = i;
-              }
-            }
-
-            if (bestTaskIndex === -1) break;
-
-            // Remove the prioritized task from the queue
-            const task = remainingTasks.splice(bestTaskIndex, 1)[0];
-            if (!task) break;
-
-            try {
-              await loadFrame(task.vIdx, task.fIdx);
-              if (currentVideoIndex === task.vIdx && canvasRef.current) {
-                drawFrame(framesCache, canvasRef.current, ctx, currentVideoIndex, currentFrameIndex);
-              }
-            } catch (e) {
-              // Silence error
-            }
-
-            // Yield control briefly to prevent main thread blocking
-            await new Promise((resolve) => setTimeout(resolve, 5));
-          }
-        };
-
-        // Start concurrent prioritized workers
-        await Promise.all(Array.from({ length: workerCount }, runWorker));
-      };
-
-      loadRemainingVideos();
-
-      // 4. Consecutive ScrollTrigger configurations for all 5 section transitions
+      // Consecutive ScrollTrigger configurations for all 5 section transitions
       setTimeout(() => {
         if (isCancelled) return;
 
@@ -414,13 +361,11 @@ export default function VideoBackground({
               scrub: 1.5,
               onToggle: (self) => {
                 if (self.isActive && !isCancelled) {
-                  currentVideoIndex = zone.videoIndex;
                   const frameIndex = Math.min(
                     Math.floor(frameObj.frame),
                     TOTAL_FRAMES - 1
                   );
-                  currentFrameIndex = frameIndex;
-                  drawFrame(framesCache, canvas, ctx, zone.videoIndex, frameIndex);
+                  setVideoPosition(zone.videoIndex, frameIndex);
                 }
               }
             },
@@ -430,13 +375,18 @@ export default function VideoBackground({
                 Math.floor(frameObj.frame),
                 TOTAL_FRAMES - 1
               );
-              
-              const active = tween.scrollTrigger?.isActive;
-              
+
+              // A trigger is inactive at exactly its start or end, so also follow the
+              // first zone at the page top and the last zone at the bottom; otherwise a
+              // fast scroll to either end leaves the canvas on a stale frame
+              const st = tween.scrollTrigger;
+              const active =
+                st?.isActive ||
+                (zone.videoIndex === 0 && st?.progress === 0) ||
+                (zone.videoIndex === VIDEO_COUNT - 1 && st?.progress === 1);
+
               if (active) {
-                currentVideoIndex = zone.videoIndex;
-                currentFrameIndex = frameIndex;
-                drawFrame(framesCache, canvas, ctx, zone.videoIndex, frameIndex);
+                setVideoPosition(zone.videoIndex, frameIndex);
               }
             }
           });
@@ -467,13 +417,15 @@ export default function VideoBackground({
 
     return () => {
       isCancelled = true;
+      notifyWorkers();
       window.removeEventListener("resize", handleResize);
+      window.removeEventListener("scroll", handleFirstScroll);
       if (resizeFrameId) cancelAnimationFrame(resizeFrameId);
-      
+
       activeTweens.forEach((t) => t.kill());
       activeScrollTriggers.forEach((st) => st.kill());
-      
-      framesCache.forEach((list) => list.fill(null));
+
+      for (const set of Object.values(framesCache)) set.forEach((list) => list.fill(null));
     };
   }, []);
 

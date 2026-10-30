@@ -1,0 +1,19 @@
+# dependencies
+node_modules/
+
+# builds
+.next/
+out/
+dist/
+next-env.d.ts
+*.tsbuildinfo
+
+# frame pipeline: .mov masters and extracted PNGs stay on your machine
+# (the WebP frames in public/frames are what the site uses)
+source/
+.frames-cache/
+
+# misc
+.DS_Store
+.env*
+.vercel

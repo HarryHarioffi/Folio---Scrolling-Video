@@ -6,9 +6,10 @@
  * Manages loading state, scroll lock, and section composition.
  */
 
+"use client";
+
 import { useEffect, useState } from "react";
 import { ReactLenis } from "lenis/react";
-import "lenis/dist/lenis.css";
 import Loader from "./components/Loader";
 import Navbar from "./components/Navbar";
 import MobileMenu from "./components/MobileMenu";

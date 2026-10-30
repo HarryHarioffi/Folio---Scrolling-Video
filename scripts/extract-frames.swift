@@ -3,20 +3,22 @@ import CoreGraphics
 import ImageIO
 import Foundation
 
+// Usage: extract-frames <videos-dir> <png-output-dir>
+// Reads video1.mov … video5.mov (HEVC with alpha) and writes 150 lossless PNG
+// frames per video. AVFoundation is used because it decodes the alpha layer.
 func extractAllVideos() {
     let fileManager = FileManager.default
-    let currentDir = fileManager.currentDirectoryPath
-    
-    let videos = [
-        "Compresed Transperant 1 Video.mov",
-        "Compresed Transperant 2 Video.mov",
-        "Compresed Transperant 3 Video.mov",
-        "Compresed Transperant 4 Video.mov",
-        "Compresed Transperant 5 Video.mov"
-    ]
-    
-    // Clean and recreate global frames folder
-    let baseOutputDir = "\(currentDir)/public/frames"
+    let args = CommandLine.arguments
+    guard args.count == 3 else {
+        print("Usage: extract-frames <videos-dir> <png-output-dir>")
+        exit(1)
+    }
+    let videosDir = args[1]
+
+    let videos = (1...5).map { "video\($0).mov" }
+
+    // Clean and recreate the PNG output folder
+    let baseOutputDir = args[2]
     if fileManager.fileExists(atPath: baseOutputDir) {
         try? fileManager.removeItem(atPath: baseOutputDir)
     }
@@ -26,7 +28,7 @@ func extractAllVideos() {
         let videoNum = videoIndex + 1
         print("\n--- PROCESSING VIDEO \(videoNum)/5: \(videoName) ---")
         
-        let videoPath = "\(currentDir)/public/\(videoName)"
+        let videoPath = "\(videosDir)/\(videoName)"
         let outputDir = "\(baseOutputDir)/video\(videoNum)"
         
         // Create directory for this specific video
